@@ -1,0 +1,62 @@
+name: Update workspace cache
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 2-4"
+    
+env:
+  USER: ${{ secrets.USER }}
+  TOKEN: ${{ secrets.TOKEN }}
+  GH_TOKEN: ${{ secrets.TOKEN }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clear Cache By Key
+        continue-on-error: true
+        run: |
+          gh api \
+            --method DELETE \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/GabrielCompriLiferay/platform-b3-boms/actions/caches?key=workspace
+      
+      # - name: free disk space
+      #   run: |
+      #     sudo swapoff -a
+      #     sudo rm -f /swapfile
+      #     sudo apt clean
+      #     docker rmi $(docker image ls -aq)
+      #     df -h
+      
+      - name: Clone Workspace
+        uses: actions/checkout@v3.3.0
+        with:
+          repository: GabrielCompriLiferay/b3-exemplo-cloud
+          path: b3-exemplo-cloud
+          token: ${{ secrets.TOKEN }}
+          
+      - name: Clear modules and Themes
+        continue-on-error: true
+        run: |
+          rm -rf b3-exemplo-cloud/liferay/themes/*
+          rm -rf b3-exemplo-cloud/liferay/modules/*
+          rm -rf b3-exemplo-cloud/liferay/configs
+          
+      - name: move liferay to workspace folder
+        run: |
+          mv b3-exemplo-cloud/liferay/ workspace
+          
+      - name: Download Gradlew Wrapper
+        working-directory: workspace
+        run: |
+          ./gradlew wrapper
+          
+      - name: Store Workspace
+        uses: actions/cache/save@v3
+        with:
+          path: "workspace"
+          key: "workspace"
