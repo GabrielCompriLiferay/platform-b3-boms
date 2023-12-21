@@ -1,0 +1,269 @@
+name: Publish Platform(BOM)
+run-name: "Publish Platform(BOM) | Repository: ${{ github.event.client_payload.repositoryName }} Version: ${{ github.event.client_payload.moduleVersion }}"
+
+concurrency:
+      group: "platform-${{ github.event.client_payload.repositoryName }}"
+      
+on:
+  repository_dispatch:
+    types: [publish-bom]
+
+permissions: write-all 
+
+env:
+  ENVIRONMENT_DEV: "dev"
+  ENVIRONMENT_UAT: "uat"
+  ENVIRONMENT_PRD: "main"
+  
+  ENVIRONMENT_DEV_SUFFIX: "-dev"
+  ENVIRONMENT_UAT_SUFFIX: "-uat"
+  ENVIRONMENT_PRD_SUFFIX: ""
+  
+  ARTIFACT_ID: "platform-b3"
+  
+  USER: ${{ secrets.USER }}
+  TOKEN: ${{ secrets.TOKEN }}
+  
+  GH_TOKEN: ${{ secrets.TOKEN }}
+
+  WORKSPACE_OWNER_REPOSITORY: "GabrielCompriLiferay" 
+  WORKSPACE_REPOSITORY: "b3-exemplo-cloud"
+  WORKSPACE_REPOSITORY_BRANCH: "dev"
+  
+  OWNER_REPOSITORY: "GabrielCompriLiferay" 
+  REPOSITORY: ${{ github.event.repository.name }}
+  
+  MODULE_FULL_VERSION: ${{ github.event.client_payload.moduleVersion }}
+  BRANCH: ${{ github.event.client_payload.branch }}
+  MODULES: "${{ toJson(github.event.client_payload.modules) }}"
+  GROUP: ${{ github.event.client_payload.group }}
+  REPOSITORY_NAME: ${{ github.event.client_payload.repositoryName }}
+  
+jobs:
+  publish-bom:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v3.3.0
+        with:
+          ref: ${{ github.ref_name }}
+          path: platform-b3
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v3.10.0
+        with:
+          java-version: '8'
+          distribution: zulu
+          
+      - name: Set Up Modules Repository References
+        run: | 
+            jsonFileDir="platform-b3/submodules-repositories-name.json"
+            if [ ! -f "$jsonFileDir" ]
+            then
+                echo "File not found, creating..."
+                touch $jsonFileDir
+                echo "[]" > $jsonFileDir
+            fi 
+            condition="$(jq -r --arg repositoryName $REPOSITORY_NAME 'map(select(. == $repositoryName )) | first // empty' $jsonFileDir)"
+            echo "condition: $condition"
+            if [ -z "$condition" ] 
+            then
+                jq -r --arg repositoryName $REPOSITORY_NAME '. += [ $repositoryName ]' $jsonFileDir > $jsonFileDir.temp && mv $jsonFileDir.temp $jsonFileDir
+                echo "Create repository ref"
+            else 
+                echo "Repository already in file"
+            fi 
+          
+      - name: Generate Bom References
+        run: | 
+         case "$BRANCH" in
+            $ENVIRONMENT_DEV)
+              jsonFileDir="platform-b3/bom-version-snapshot.json"
+              ;;
+            $ENVIRONMENT_UAT)
+              jsonFileDir="platform-b3/bom-version-pre-release.json"
+              ;;
+            $ENVIRONMENT_PRD)
+              jsonFileDir="platform-b3/bom-version-release.json"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+          jsonDir="platform-b3/"
+          listModules=$(jq -r '.[]' <<< $MODULES)
+          if [ ! -f "$jsonFileDir" ]
+          then
+            echo "File not found creating..."
+            touch $jsonFileDir
+            echo "[]" > $jsonFileDir
+          fi 
+          for file in $listModules
+          do
+              condition="$(jq -r --arg moduleValue $file 'map(select(.module == $moduleValue )) | first // empty' $jsonFileDir)"
+              echo "file: $file | condition: $condition"
+              if [ -z "$condition" ] 
+              then
+                  jq -r --arg groupId $GROUP --arg moduleValue $file --arg versionValue $MODULE_FULL_VERSION '. += [{ module: $moduleValue, version: $versionValue, group:$groupId }]' $jsonFileDir > $jsonFileDir.temp && mv $jsonFileDir.temp $jsonFileDir
+                  echo "create object"
+              else 
+                  jq -r --arg moduleValue $file --arg versionValue $MODULE_FULL_VERSION 'map(if .module == $moduleValue then .version = $versionValue else . end)' $jsonFileDir > $jsonFileDir.temp && mv $jsonFileDir.temp $jsonFileDir
+                  echo "update object"
+              fi 
+          done
+      
+      - name: Get Stored Workspace
+        uses: actions/cache/restore@v3
+        with:
+          path: "workspace"
+          key: "workspace"
+          
+      - name: get BomRelease.json and set to publish gradle  
+        id: suffix
+        run: |
+          case "$BRANCH" in
+            $ENVIRONMENT_DEV)
+              bomObjects=$(jq -c '.[]' < platform-b3/bom-version-snapshot.json)
+              suffix="$ENVIRONMENT_DEV_SUFFIX"
+              firstTag="$(jq -r 'map(select(.tag_name | test("-dev") )) | first | .tag_name // empty' <<< $(gh api repos/$OWNER_REPOSITORY/$REPOSITORY/releases?per_page=100))"
+              ;;
+            $ENVIRONMENT_UAT)
+              bomObjects=$(jq -c '.[]' < platform-b3/bom-version-pre-release.json)
+              suffix="$ENVIRONMENT_UAT_SUFFIX"
+              firstTag="$(jq -r 'map(select(.tag_name | test("-uat") )) | first | .tag_name // empty' <<< $(gh api repos/$OWNER_REPOSITORY/$REPOSITORY/releases?per_page=100))"
+              ;;
+            $ENVIRONMENT_PRD)
+              bomObjects=$(jq -c '.[]' < platform-b3/bom-version-release.json)
+              suffix="$ENVIRONMENT_PRD_SUFFIX"
+              firstTag="$(jq -r 'map(select(.prerelease == false)) | first | .tag_name // empty' <<< $(gh api repos/$OWNER_REPOSITORY/$REPOSITORY/releases?per_page=100))"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+          fileTemp="platform-b3/newfile.temp"
+          fileGradle="workspace/publish-bom.gradle"
+          arrayDepedencies=()
+          for object in $bomObjects; do
+              moduleName=$(jq -r '.module'<<< $(echo $object))
+              moduleVersion=$(jq -r '.version'<<< $(echo $object))
+              ModuleGroup=$(jq -r '.group'<<< $(echo $object))
+              dependency=$(echo 'api "'"${ModuleGroup}:${moduleName}:${moduleVersion}"'"')
+              arrayDepedencies+=("$dependency")
+          done
+          for i in "${arrayDepedencies[@]}"
+          do
+             echo $i >> $fileTemp
+          done
+          echo | awk -v VARIABLE="$(cat $fileTemp)" '{gsub("//#", VARIABLE); print}' $fileGradle > $fileGradle.temp && mv $fileGradle.temp $fileGradle
+          rm $fileTemp
+          echo "suffix=$suffix" >> $GITHUB_OUTPUT
+          echo "firstTag=$firstTag" >> $GITHUB_OUTPUT
+          echo "lastVersion=$firstTag" >> $GITHUB_OUTPUT
+          
+      - name: With Don`t have Tag then exit
+        working-directory: platform-b3
+        env:
+          FIRST_TAG: ${{ steps.suffix.outputs.firstTag }}
+        run: |  
+          # firstTag="$(jq -r "map(select(.name | $CONDITION_ENVIRONMENT)) | first | .name // empty" <<< $(gh api repos/$OWNER_REPOSITORY/$REPOSITORY/tags))"
+          echo "firstTag: $FIRST_TAG"
+          if [ -z "$FIRST_TAG" ]
+          then
+            Echo "is need create the first tag for each bom environment"
+            exit 1
+          fi
+          
+      - name: Get GitHub latest release version
+        id: latestReleaseVersion
+        env:
+          lAST_VERSION: ${{ steps.suffix.outputs.lastVersion }}
+        working-directory: platform-b3
+        run: |          
+          LASTEST_VERSION=$(echo "$lAST_VERSION" | rev | cut -d '-' -f 1 | rev)
+                              
+          echo "latestReleaseVersion: $LASTEST_VERSION"
+          echo "latestReleaseVersion=$LASTEST_VERSION" >> $GITHUB_OUTPUT
+          
+      - name: Set Up Module Only Version
+        env:
+          LASTEST_RELEASE_VERSION: ${{ steps.latestReleaseVersion.outputs.latestReleaseVersion }}
+        id: moduleOnlyVersion
+        working-directory: platform-b3
+        run: |                      
+          IFS=. read -r major minor patch <<< $LASTEST_RELEASE_VERSION          
+          patch=$(expr $patch + 1)
+          
+          echo "version: $major.$minor.$patch"
+          echo "moduleOnlyVersion=$major.$minor.$patch" >> $GITHUB_OUTPUT
+      
+      - name: Has staged changes
+        id: hasStagedChanges
+        working-directory: platform-b3
+        run: |     
+            if [[ -n $(git status --porcelain) ]]; then
+              echo "There are changes that need to be committed."
+              echo "hasStagedChanges=true" >> $GITHUB_OUTPUT
+            else
+              echo "No changes need to be committed."
+              echo "hasStagedChanges=false" >> $GITHUB_OUTPUT
+            fi
+          
+      - name: git pull
+        if: ${{ steps.hasStagedChanges.outputs.hasStagedChanges == 'true' }}
+        env:
+          SUFFIX: ${{ steps.suffix.outputs.suffix }}
+          MODULE_VERSION: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+        working-directory: platform-b3
+        run: |     
+          git add .
+          git stash
+          git pull
+          git stash pop
+          
+      - name: Set Up Github Tag
+        if: ${{ steps.hasStagedChanges.outputs.hasStagedChanges == 'true' }}
+        env:
+          SUFFIX: ${{ steps.suffix.outputs.suffix }}
+          MODULE_VERSION: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+        working-directory: platform-b3
+        run: |     
+          echo "Tag: $ARTIFACT_ID$SUFFIX-$MODULE_VERSION"
+          git tag $ARTIFACT_ID$SUFFIX-$MODULE_VERSION
+          git push origin --tags
+      
+      - name: push to platform-b3
+        if: ${{ steps.hasStagedChanges.outputs.hasStagedChanges == 'true' }}
+        working-directory: platform-b3
+        run: |
+            git config user.name BotDeploy
+            git config user.email BotDeploy@github.com
+            git add .
+            git commit -m "Repository: $REPOSITORY_NAME Version:$MODULE_FULL_VERSION"
+            git push  
+                
+      - name: Publish Bom 
+        if: ${{ steps.hasStagedChanges.outputs.hasStagedChanges == 'true'}}
+        env:
+          SUFFIX: ${{ steps.suffix.outputs.suffix }}
+          MODULE_VERSION: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+        working-directory: workspace
+        run: |
+          ./gradlew -b publish-bom.gradle publish
+          
+      - name: Create New Pre-Release or Release By Branch  
+        if: ${{ steps.hasStagedChanges.outputs.hasStagedChanges == 'true' }}
+        env:
+          SUFFIX: ${{ steps.suffix.outputs.suffix }}
+          MODULE_VERSION: ${{ steps.moduleOnlyVersion.outputs.moduleOnlyVersion }}
+        working-directory: platform-b3
+        run: |
+          case "$BRANCH" in
+            $ENVIRONMENT_PRD)
+              git fetch
+              gh release create $ARTIFACT_ID$SUFFIX-$MODULE_VERSION
+              ;;
+            *)              
+              git fetch
+              gh release create $ARTIFACT_ID$SUFFIX-$MODULE_VERSION --prerelease
+              ;;
+          esac
