@@ -16,10 +16,10 @@ env:
   USER: ${{ secrets.USER }}
   TOKEN: ${{ secrets.TOKEN }}
 
-  WORKSPACE_OWNER_REPOSITORY: "LiferayGabrielCompri" 
+  WORKSPACE_OWNER_REPOSITORY: "GabrielCompriLiferay" 
   WORKSPACE_REPOSITORY: "b3-exemplo-cloud"
   
-  OWNER_REPOSITORY: "LiferayGabrielCompri" 
+  OWNER_REPOSITORY: "GabrielCompriLiferay" 
   REPOSITORY: ${{ github.event.repository.name }}
     
 jobs:
