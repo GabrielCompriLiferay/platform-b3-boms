@@ -1,0 +1,107 @@
+name: Set Up Bom First Version
+
+on:
+  workflow_dispatch:
+
+permissions: write-all 
+
+env:
+  ENVIRONMENT_DEV: "dev"
+  ENVIRONMENT_UAT: "uat"
+  ENVIRONMENT_PRD: "main"
+  
+  ARTIFACT_ID: "platform-b3-boms"
+  GROUP: "br.com.b3"
+  
+  USER: ${{ secrets.USER }}
+  TOKEN: ${{ secrets.TOKEN }}
+
+  WORKSPACE_OWNER_REPOSITORY: "LiferayGabrielCompri" 
+  WORKSPACE_REPOSITORY: "b3-exemplo-cloud"
+  
+  OWNER_REPOSITORY: "LiferayGabrielCompri" 
+  REPOSITORY: ${{ github.event.repository.name }}
+    
+jobs:
+
+  myEvent:
+    runs-on: ubuntu-latest
+    steps:
+            
+      - uses: actions/checkout@v3.3.0
+        with:
+          path: platform-b3-boms
+            
+      - name: Clone Workspace
+        uses: actions/checkout@v3.3.0
+        with:
+          repository: ${{ env.WORKSPACE_OWNER_REPOSITORY }}/${{ env.WORKSPACE_REPOSITORY }}
+          path: workspace
+          token: ${{ secrets.TOKEN }}
+          
+      - name: Publish Bom dev
+        continue-on-error: true
+        env:
+          SUFFIX: "-dev"
+          MODULE_VERSION: "1.0.0"
+        working-directory: workspace/liferay
+        run: |
+          fileGradle="publish-bom.gradle"
+          echo | awk -v VARIABLE='api "hello-world-a:1.0.0"' '{gsub("//#", VARIABLE); print}' $fileGradle > $fileGradle.temp && mv $fileGradle.temp $fileGradle
+          cat $fileGradle 
+          sleep 2
+          ./gradlew -b publish-bom.gradle :publish
+                    
+      - name: Set Up Github Tag dev
+        continue-on-error: true
+        env:
+          SUFFIX: "-dev"
+          MODULE_VERSION: "1.0.0"
+        working-directory: platform-b3-boms
+        run: |     
+          echo "Tag: $ARTIFACT_ID$SUFFIX-$MODULE_VERSION"
+          git tag $ARTIFACT_ID$SUFFIX-$MODULE_VERSION
+          git push origin --tags
+          gh release create $ARTIFACT_ID$SUFFIX-$MODULE_VERSION --prerelease
+          
+      - name: Publish Bom uat
+        continue-on-error: true
+        env:
+          SUFFIX: "-uat"
+          MODULE_VERSION: "1.0.0"
+        working-directory: workspace/liferay
+        run: |
+          ./gradlew -b publish-bom.gradle :publish
+                    
+      - name: Set Up Github Tag uat
+        continue-on-error: true
+        env:
+          SUFFIX: "-uat"
+          MODULE_VERSION: "1.0.0"
+        working-directory: platform-b3-boms
+        run: |     
+          echo "Tag: $ARTIFACT_ID$SUFFIX-$MODULE_VERSION"
+          git tag $ARTIFACT_ID$SUFFIX-$MODULE_VERSION
+          git push origin --tags
+          gh release create $ARTIFACT_ID$SUFFIX-$MODULE_VERSION --prerelease
+          
+      - name: Publish Bom prd
+        continue-on-error: true
+        env:
+          SUFFIX: ""
+          MODULE_VERSION: "1.0.0"
+        working-directory: workspace/liferay
+        run: |
+          ./gradlew -b publish-bom.gradle :publish
+                    
+      - name: Set Up Github Tag prd
+        continue-on-error: true
+        env:
+          SUFFIX: ""
+          MODULE_VERSION: "1.0.0"
+        working-directory: platform-b3-boms
+        run: |     
+          echo "Tag: $ARTIFACT_ID$SUFFIX-$MODULE_VERSION"
+          git tag $ARTIFACT_ID$SUFFIX-$MODULE_VERSION
+          git push origin --tags
+          gh release create $ARTIFACT_ID$SUFFIX-$MODULE_VERSION
