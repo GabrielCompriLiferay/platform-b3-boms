@@ -31,7 +31,13 @@ jobs:
       - uses: actions/checkout@v3.3.0
         with:
           path: platform-b3-boms
-            
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v3.10.0
+        with:
+          java-version: '8'
+          distribution: zulu
+    
       - name: Clone Workspace
         uses: actions/checkout@v3.3.0
         with:
