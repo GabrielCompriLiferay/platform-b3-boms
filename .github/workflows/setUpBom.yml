@@ -38,6 +38,7 @@ jobs:
           repository: ${{ env.WORKSPACE_OWNER_REPOSITORY }}/${{ env.WORKSPACE_REPOSITORY }}
           path: workspace
           token: ${{ secrets.TOKEN }}
+          ref: main
           
       - name: Publish Bom dev
         continue-on-error: true
